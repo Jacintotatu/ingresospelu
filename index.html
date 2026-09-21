@@ -532,6 +532,8 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   /* Services editor */
   #servicesPanel { display: none; }
   #servicesPanel.open { display: block; }
+  #holidaysPanel { display: none; }
+  #holidaysPanel.open { display: block; }
   table.services { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
   table.services th {
     text-align: left; font-size: 12px; color: var(--plum-soft);
@@ -671,10 +673,12 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       <p class="note" id="augustCount">0 días seleccionados</p>
     </div>
     <p class="note" id="workdaysNote"></p>
+    <p class="note" id="holidaysNote"></p>
 
     <div class="actions">
       <button class="primary" id="generateBtn">Generar reparto</button>
       <button class="link" id="toggleServices">Editar servicios y precios</button>
+      <button class="link" id="toggleHolidays">Festivos personalizados</button>
     </div>
   </section>
 
@@ -687,6 +691,19 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     <div class="actions">
       <button class="ghost small" id="addServiceBtn">+ Añadir servicio</button>
       <button class="ghost small" id="resetServicesBtn">Restaurar valores originales</button>
+    </div>
+    <p class="note">Los cambios se guardan automáticamente en este navegador.</p>
+  </section>
+
+  <section class="card no-print" id="holidaysPanel">
+    <h2>Festivos personalizados</h2>
+    <p class="note">Los festivos nacionales (Año Nuevo, Reyes, Jueves y Viernes Santo, 1 de mayo, Asunción, Fiesta Nacional, Todos los Santos, Constitución, Inmaculada y Navidad) y el de la Región de Murcia (1 de marzo) ya se detectan solos. Añade aquí solo los festivos locales de Cartagena u otros que falten.</p>
+    <table class="services" id="holidaysTable">
+      <thead><tr><th>Fecha</th><th>Descripción</th><th></th></tr></thead>
+      <tbody id="holidaysBody"></tbody>
+    </table>
+    <div class="actions">
+      <button class="ghost small" id="addHolidayBtn">+ Añadir festivo</button>
     </div>
     <p class="note">Los cambios se guardan automáticamente en este navegador.</p>
   </section>
@@ -726,6 +743,63 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   ];
   const MESES = ['', 'Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
   const DOW_LABELS = ['L','M','X','J','V','S','D'];
+  const HOLIDAYS_KEY = 'ingresos_festivos_personalizados_v1';
+
+  // Fixed-date national holidays (Spain) + the Región de Murcia day.
+  const FIXED_HOLIDAYS = [
+    [1, 1, 'Año Nuevo'],
+    [1, 6, 'Reyes (Epifanía)'],
+    [3, 1, 'Día de la Región de Murcia'],
+    [5, 1, 'Fiesta del Trabajo'],
+    [8, 15, 'Asunción de la Virgen'],
+    [10, 12, 'Fiesta Nacional de España'],
+    [11, 1, 'Todos los Santos'],
+    [12, 6, 'Día de la Constitución'],
+    [12, 8, 'Inmaculada Concepción'],
+    [12, 25, 'Navidad']
+  ];
+
+  function computeEasterSunday(year){
+    const a = year % 19, b = Math.floor(year / 100), c = year % 100;
+    const d = Math.floor(b / 4), e = b % 4;
+    const f = Math.floor((b + 8) / 25);
+    const g = Math.floor((b - f + 1) / 3);
+    const h = (19 * a + b - d - g + 15) % 30;
+    const i = Math.floor(c / 4), k = c % 4;
+    const l = (32 + 2 * e + 2 * i - h - k) % 7;
+    const m = Math.floor((a + 11 * h + 22 * l) / 451);
+    const month = Math.floor((h + l - 7 * m + 114) / 31);
+    const day = ((h + l - 7 * m + 114) % 31) + 1;
+    return new Date(year, month - 1, day);
+  }
+
+  function getAutoHolidays(year){
+    const list = FIXED_HOLIDAYS.map(([m, d, label]) => ({ month: m, day: d, label }));
+    const easter = computeEasterSunday(year);
+    const maundy = new Date(easter); maundy.setDate(easter.getDate() - 3);
+    const goodFriday = new Date(easter); goodFriday.setDate(easter.getDate() - 2);
+    list.push({ month: maundy.getMonth() + 1, day: maundy.getDate(), label: 'Jueves Santo' });
+    list.push({ month: goodFriday.getMonth() + 1, day: goodFriday.getDate(), label: 'Viernes Santo' });
+    return list;
+  }
+
+  function isoDate(year, month, day){
+    return year + '-' + String(month).padStart(2, '0') + '-' + String(day).padStart(2, '0');
+  }
+
+  function isHoliday(year, month, day){
+    if (getAutoHolidays(year).some(h => h.month === month && h.day === day)) return true;
+    const iso = isoDate(year, month, day);
+    return customHolidays.some(h => h.date === iso);
+  }
+
+  function getHolidayLabel(year, month, day){
+    const auto = getAutoHolidays(year).find(h => h.month === month && h.day === day);
+    if (auto) return auto.label;
+    const iso = isoDate(year, month, day);
+    const custom = customHolidays.find(h => h.date === iso);
+    return custom ? (custom.label || 'Festivo') : null;
+  }
 
   // Some contexts (file:// opened directly, certain in-app browsers) treat storage
   // as unavailable and THROW on access instead of just failing silently — so every
@@ -756,6 +830,11 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
           services = data.services;
           renderServices();
         }
+        if (Array.isArray(data.customHolidays)) {
+          customHolidays = data.customHolidays;
+          renderHolidays();
+          updateMonthUI();
+        }
         if (typeof data.lastSheetNumber === 'number' && !isNaN(data.lastSheetNumber)) {
           safeSet(SHEET_KEY, String(data.lastSheetNumber));
           if (!hasGenerated) sheetNumberInput.value = data.lastSheetNumber;
@@ -769,11 +848,13 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     const lastSheet = parseInt(safeGet(SHEET_KEY), 10);
     cloudDoc.set({
       services: services,
+      customHolidays: customHolidays,
       lastSheetNumber: isNaN(lastSheet) ? 0 : lastSheet
     }).catch(() => {});
   }
 
   let services = loadServices();
+  let customHolidays = loadCustomHolidays();
 
   function loadServices(){
     try {
@@ -841,6 +922,67 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   });
   renderServices();
 
+  // ---------- Custom holidays editor ----------
+  function loadCustomHolidays(){
+    try {
+      const raw = safeGet(HOLIDAYS_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) return parsed;
+      }
+    } catch(e) {}
+    return [];
+  }
+  function saveCustomHolidays(){
+    try { safeSet(HOLIDAYS_KEY, JSON.stringify(customHolidays)); } catch(e) {}
+    pushCloud();
+    updateMonthUI();
+  }
+
+  const holidaysBody = document.getElementById('holidaysBody');
+  const holidaysPanel = document.getElementById('holidaysPanel');
+  const toggleHolidaysBtn = document.getElementById('toggleHolidays');
+
+  function renderHolidays(){
+    holidaysBody.innerHTML = '';
+    customHolidays.forEach((h, idx) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML = `
+        <td class="price-cell"><input type="date" data-idx="${idx}" data-field="date" value="${escapeAttr(h.date || '')}"></td>
+        <td><input type="text" data-idx="${idx}" data-field="label" value="${escapeAttr(h.label || '')}" placeholder="Ej. Fiestas de Cartagena"></td>
+        <td class="del-cell"><button class="del-btn" data-idx="${idx}" title="Eliminar">✕</button></td>
+      `;
+      holidaysBody.appendChild(tr);
+    });
+  }
+
+  holidaysBody.addEventListener('input', (e) => {
+    const idx = e.target.getAttribute('data-idx');
+    const field = e.target.getAttribute('data-field');
+    if (idx === null) return;
+    if (field === 'date') customHolidays[idx].date = e.target.value;
+    if (field === 'label') customHolidays[idx].label = e.target.value;
+    saveCustomHolidays();
+  });
+  holidaysBody.addEventListener('click', (e) => {
+    if (e.target.classList.contains('del-btn')) {
+      const idx = e.target.getAttribute('data-idx');
+      customHolidays.splice(idx, 1);
+      saveCustomHolidays();
+      renderHolidays();
+    }
+  });
+  document.getElementById('addHolidayBtn').addEventListener('click', () => {
+    customHolidays.push({ date: '', label: '' });
+    saveCustomHolidays();
+    renderHolidays();
+  });
+  toggleHolidaysBtn.addEventListener('click', () => {
+    holidaysPanel.classList.toggle('open');
+    toggleHolidaysBtn.textContent = holidaysPanel.classList.contains('open') ? 'Ocultar festivos personalizados' : 'Festivos personalizados';
+  });
+  renderHolidays();
+
   // ---------- Month / working days ----------
   const mesSelect = document.getElementById('mes');
   const anioInput = document.getElementById('anio');
@@ -848,6 +990,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
   const dayGrid = document.getElementById('dayGrid');
   const augustCount = document.getElementById('augustCount');
   const workdaysNote = document.getElementById('workdaysNote');
+  const holidaysNote = document.getElementById('holidaysNote');
 
   let workedAugustDays = new Set();
   let hasGenerated = false;
@@ -893,8 +1036,10 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
       const chip = document.createElement('div');
       chip.textContent = d;
       chip.className = 'day-chip';
-      if (dow === 0) {
+      const holidayLabel = getHolidayLabel(year, 8, d);
+      if (dow === 0 || holidayLabel) {
         chip.classList.add('off');
+        if (holidayLabel) chip.title = holidayLabel;
       } else {
         chip.addEventListener('click', () => {
           if (workedAugustDays.has(d)) { workedAugustDays.delete(d); chip.classList.remove('worked'); }
@@ -909,6 +1054,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
 
   function updateMonthUI(){
     const month = parseInt(mesSelect.value, 10);
+    const year = parseInt(anioInput.value, 10) || new Date().getFullYear();
     if (month === 8) {
       augustPicker.style.display = 'block';
       buildAugustGrid();
@@ -920,6 +1066,16 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
         ? 'Se cuentan como laborables de lunes a viernes (sin sábados).'
         : 'Se cuentan como laborables de lunes a sábado.';
     }
+
+    const total = daysInMonth(year, month);
+    const monthHolidays = [];
+    for (let d = 1; d <= total; d++) {
+      const label = getHolidayLabel(year, month, d);
+      if (label) monthHolidays.push(d + ' (' + label + ')');
+    }
+    holidaysNote.textContent = monthHolidays.length
+      ? 'Festivos detectados este mes (no cuentan como laborables): ' + monthHolidays.join(', ') + '.'
+      : '';
   }
   mesSelect.addEventListener('change', updateMonthUI);
   anioInput.addEventListener('change', updateMonthUI);
@@ -929,6 +1085,7 @@ function(t){t.__bidiEngine__=t.prototype.__bidiEngine__=function(t){var n,r,i,a,
     const total = daysInMonth(year, month);
     const result = [];
     for (let d = 1; d <= total; d++) {
+      if (isHoliday(year, month, d)) continue;
       if (month === 8) {
         if (workedAugustDays.has(d)) result.push(d);
         continue;
